@@ -1,0 +1,25 @@
+# rag-toolkit: Reusable RAG Building Blocks
+
+## Core
+pymilvus>=2.5.0
+openai>=1.0.0
+requests>=2.31.0
+numpy>=1.24.0
+loguru>=0.7.0
+
+## Storage
+pymysql>=1.1.0
+
+## Reranker
+xinference-client>=0.13.0
+
+## Context Compression
+jieba>=0.42.1
+rank-bm25>=0.2.2
+
+## Deployment (optional)
+# docker-compose via Docker Desktop — no pip package needed
+
+## Development
+# pytest>=8.0.0
+# mypy>=1.8.0

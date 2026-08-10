@@ -178,7 +178,7 @@ class BaseRAGPipeline(ABC):
             results = self.milvus.hybrid_search(
                 collection_name=collection_name,
                 text_data=[query],
-                text_anns_field="sparse_text",
+                text_anns_field="sparse_vector",
                 vec_data=[embedding],
                 vec_anns_field="vector",
                 output_fields=["doc_id", "paragraph_id", "title", "content"],

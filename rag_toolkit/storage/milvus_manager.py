@@ -22,6 +22,7 @@ from pymilvus import (
     RRFRanker,
     WeightedRanker,
 )
+from pymilvus.milvus_client.index import IndexParams
 
 from rag_toolkit.core.config import Config
 
@@ -123,9 +124,22 @@ class MilvusManager:
             self.milvus.create_collection(
                 collection_name=collection_name, schema=schema, **kwargs
             )
+            # Dense index (required for vector ANN search).
+            ip_dense = IndexParams(
+                field_name="vector", index_type="AUTOINDEX", metric_type="COSINE"
+            )
             self.milvus.create_index(
-                collection_name=collection_name,
-                index_params={"field_name": "vector", "metric_type": "COSINE"},
+                collection_name=collection_name, index_params=ip_dense
+            )
+            # Sparse index (required for hybrid_search BM25 on the sparse_vector
+            # output field of the built-in BM25 function).
+            ip_sparse = IndexParams(
+                field_name="sparse_vector",
+                index_type="SPARSE_INVERTED_INDEX",
+                metric_type="BM25",
+            )
+            self.milvus.create_index(
+                collection_name=collection_name, index_params=ip_sparse
             )
             logger.info(f"Collection '{collection_name}' created and indexed.")
             return True
@@ -174,13 +188,15 @@ class MilvusManager:
         expr: str = "",
         **kwargs: Any,
     ):
+        # pymilvus >= 2.5 renames the search filter kwarg to `filter`;
+        # `expr` is kept here for call-site compatibility and mapped through.
         return self.milvus.search(
             collection_name=collection_name,
             data=vectors,
             anns_field=anns_field,
             limit=limit,
             output_fields=output_fields,
-            expr=expr,
+            filter=expr,
             **kwargs,
         )
 
@@ -190,7 +206,7 @@ class MilvusManager:
         vec_data: list[list[float]],
         text_data: list[str],
         vec_anns_field: str = "vector",
-        text_anns_field: str = "sparse_text",
+        text_anns_field: str = "sparse_vector",
         vec_limit: int = 300,
         full_limit: int = 300,
         res_limit: int = 100,
@@ -200,18 +216,23 @@ class MilvusManager:
         full_expr: str = "",
         vec_search_params: Optional[dict] = None,
         full_text_search_params: Optional[dict] = None,
+        limit: Optional[int] = None,
     ) -> list[list[dict]]:
         """Hybrid search combining dense vector and BM25 full-text retrieval.
 
         Uses ``WeightedRanker`` by default to fuse results from both pipelines.
+
+        ``limit`` is an alias for ``res_limit`` kept for call-site compatibility.
         """
+        if limit is not None:
+            res_limit = limit
         output_fields = output_fields or ["*"]
         ef = (vec_limit + full_limit) * 2
 
         vec_search_params = vec_search_params or {"params": {"ef": ef}}
         full_text_search_params = full_text_search_params or {
             "metric_type": "BM25",
-            "params": {"ef": ef},
+            "params": {"drop_ratio_building": 0.2, "drop_ratio_search": 0.2},
         }
 
         vec_req = AnnSearchRequest(
@@ -231,10 +252,12 @@ class MilvusManager:
 
         rerank = rerank or WeightedRanker(0.4, 0.6)  # text_weight, vec_weight
 
+        # pymilvus >= 2.5 names the fused-rank kwarg `ranker`;
+        # `rerank` is kept here for call-site compatibility and mapped through.
         return self.milvus.hybrid_search(
             collection_name=collection_name,
             reqs=[vec_req, text_req],
-            rerank=rerank,
+            ranker=rerank,
             limit=res_limit,
             output_fields=output_fields,
         )

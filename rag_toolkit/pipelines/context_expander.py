@@ -44,6 +44,11 @@ class BM25Compressor:
         if not sentences:
             return ""
 
+        # 短文档不压缩：句子数太少时窗口抑制会误删关键句（如 FAQ 的 Q/A 两短句），
+        # 压缩反而丢信息，直接返回原文。
+        if len(sentences) <= self.window_size * 2 + 1:
+            return context
+
         tokenized = [jieba.lcut(s) for s in sentences]
         bm25 = BM25Okapi(tokenized)
 
@@ -72,6 +77,10 @@ class BM25Compressor:
         para = re.sub(r"([。！？\?])([^”’])", r"\1\n\2", para)
         para = re.sub(r"(\…{2})([^”’])", r"\1\n\2", para)
         para = re.sub(r"([。！？\?][”’])([^。！？\?])", r"\1\n\2", para)
+        # 英文标点切分：句点后跟空格+大写/数字（避免小数 3.7、缩写 U.S.）
+        para = re.sub(r"\.(\s+[A-Z0-9])", r".\n\1", para)
+        # 冒号后跟空格+大写/数字（避免 https://、9:00 时间）
+        para = re.sub(r":(\s+[A-Z0-9])", r":\n\1", para)
         return para.split("\n")
 
 

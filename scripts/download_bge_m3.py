@@ -1,5 +1,6 @@
 """下载 BAAI/bge-m3 模型到本地缓存（Step 1.4）"""
 import sys
+
 sys.path.insert(0, ".")
 
 from FlagEmbedding import BGEM3FlagModel

@@ -5,14 +5,18 @@
 2. bge-m3 多语言 embedding（中/英/阿）
 3. 默认 schema（含 BM25 函数）+ dense 检索命中
 """
-import sys, os, tempfile
-sys.path.insert(0, ".")
+import os
+import sys
+import tempfile
 
-from pymilvus import MilvusClient
-from rag_toolkit.storage.milvus_manager import MilvusManager
+sys.path.insert(0, ".")
 
 # ── 1. bge-m3 embedding ──
 from FlagEmbedding import BGEM3FlagModel
+from pymilvus import MilvusClient
+
+from rag_toolkit.storage.milvus_manager import MilvusManager
+
 print("加载 bge-m3 ...")
 model = BGEM3FlagModel("/home/l/.cache/hf-bge-m3", use_fp16=False)
 
@@ -66,7 +70,7 @@ for label, q in queries.items():
         hh = mgr.hybrid_search(collection, vec_data=[qv], text_data=[q], limit=1, output_fields=["text"])
         if hh and hh[0]:
             print(f"  hybrid 命中 id={hh[0][0].get('id')} score={hh[0][0].get('distance'):.4f}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — 探针脚本：打印错误继续
         print(f"  hybrid ❌: {type(e).__name__}: {str(e)[:100]}")
 
 mgr.drop_collection(collection)

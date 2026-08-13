@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 import numpy as np
-from xinference.client import Client
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,12 @@ logger = logging.getLogger(__name__)
 # ── XReranker ─────────────────────────────────────────────────────────
 
 class XReranker:
-    """Rerank documents using a model hosted on Xinference (or any server that exposes
-    the ``<model>/rerank`` endpoint).
+    """Rerank documents against a self-hosted model server (``POST {base_url}/v1/rerank``,
+    OpenAI/xinference-compatible rerank endpoint).
 
     Args:
-        base_url: Xinference server URL.
-        model_name: Model name registered in Xinference.
+        base_url: Model server URL (default port 9997).
+        model_name: Rerank model name registered on the server.
         top_k: Number of top documents to keep (overridden by caller if needed).
     """
 
@@ -42,16 +42,35 @@ class XReranker:
         model_name: str = "bge-reranker-v2-m3",
         top_k: int = 10,
     ):
-        self._model = Client(base_url).get_model(model_name)
+        self.base_url = base_url.rstrip("/")
+        self.model_name = model_name
         self.top_k = top_k
+        self._session = requests.Session()
 
     def rerank(self, documents: Sequence[str], query: str) -> List[Tuple[int, float]]:
-        """Return a list of ``(index, relevance_score)`` sorted by score descending."""
+        """Return a list of ``(index, relevance_score)`` sorted by score descending.
+
+        On failure logs the error and returns ``[]`` (callers rely on this).
+        """
         if not documents:
             return []
-        response = self._model.rerank(documents, query)
-        results: list[dict] = response["results"]
-        return [(item["index"], item["relevance_score"]) for item in results]
+        try:
+            resp = self._session.post(
+                f"{self.base_url}/v1/rerank",
+                json={
+                    "model": self.model_name,
+                    "documents": list(documents),
+                    "query": query,
+                    "top_n": None,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            results: list[dict] = resp.json()["results"]
+            return [(item["index"], item["relevance_score"]) for item in results]
+        except Exception as e:
+            logger.error(f"Rerank request failed: {e}")
+            return []
 
 
 # ── Single-pass Rerank ───────────────────────────────────────────────

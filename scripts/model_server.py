@@ -57,6 +57,8 @@ MODEL_PATHS: dict[str, str] = {
     "bge-m3": "/home/l/.cache/hf-bge-m3",
     "bge-reranker-v2-m3": "/home/l/.cache/hf-reranker",
 }
+# 模型归属方标识（OpenAI /v1/models 的 owned_by 字段），单一来源，避免散落字符串。
+MODEL_OWNER = "rag-toolkit"
 # 只有 reranker 类模型允许用于 /v1/rerank
 RERANK_MODELS = {"bge-reranker-v2-m3"}
 EMBED_MODELS = {"bge-m3"}
@@ -229,6 +231,18 @@ class OpenAIEmbeddingRequest(BaseModel):
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok", "models": sorted(MODEL_PATHS.keys())}
+
+
+@app.get("/v1/models")
+def list_models() -> dict:
+    """OpenAI 兼容模型列表。只读 MODEL_PATHS 注册表，绝不加载模型。"""
+    return {
+        "object": "list",
+        "data": [
+            {"id": name, "object": "model", "owned_by": MODEL_OWNER}
+            for name in sorted(MODEL_PATHS)
+        ],
+    }
 
 
 @app.post("/embeddings")

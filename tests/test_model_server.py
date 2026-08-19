@@ -200,3 +200,51 @@ def test_healthz_regression(client):
     assert body["status"] == "ok"
     models = body["models"]
     assert "bge-m3" in models and "bge-reranker-v2-m3" in models
+
+
+# ── /v1/models ─────────────────────────────────────────────────────────
+
+
+def test_v1_models_ok(client):
+    resp = client.get("/v1/models")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["object"] == "list"
+    ids = [item["id"] for item in body["data"]]
+    assert "bge-m3" in ids and "bge-reranker-v2-m3" in ids
+    # data 顺序与 /healthz models 一致（两者同为 sorted(MODEL_PATHS)）
+    healthz_models = client.get("/healthz").json()["models"]
+    assert ids == healthz_models
+
+
+def test_v1_models_openai_shape(client):
+    resp = client.get("/v1/models")
+    assert resp.status_code == 200
+    for item in resp.json()["data"]:
+        assert set(item.keys()) == {"id", "object", "owned_by"}
+        assert item["object"] == "model"
+        assert item["owned_by"] == "rag-toolkit"
+
+
+def test_v1_models_empty_registry(client, monkeypatch):
+    monkeypatch.setattr(model_server, "MODEL_PATHS", {})
+    resp = client.get("/v1/models")
+    assert resp.status_code == 200
+    assert resp.json() == {"object": "list", "data": []}
+
+
+def test_v1_models_no_model_load(client, monkeypatch):
+    def spy_load(name):
+        raise AssertionError(f"_load_model must not be called by /v1/models (got '{name}')")
+
+    monkeypatch.setattr(model_server, "_load_model", spy_load)
+    resp = client.get("/v1/models")
+    assert resp.status_code == 200
+    assert resp.json()["object"] == "list"
+
+
+def test_v1_models_regression_healthz(client):
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    # models 不变：内容与排序均钉死（与 sorted(MODEL_PATHS) 同源）
+    assert resp.json()["models"] == ["bge-m3", "bge-reranker-v2-m3"]

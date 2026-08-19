@@ -29,3 +29,6 @@ app.log
 *.csv
 *.json
 output.txt
+
+# collab-flow work-items
+.flow/

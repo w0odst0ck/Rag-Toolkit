@@ -13,6 +13,10 @@ Rag-Toolkit / scripts / model_server.py
     POST /v1/rerank
         body  {"model": "...", "documents": [...], "query": "...", "top_n": null, ...}
         → {"results": [{"index": i, "relevance_score": s}]}  按分数降序
+    POST /v1/embeddings
+        body  {"model": "bge-m3", "input": ["t1", ...] | "t1"}  (OpenAI 兼容,input 接受单字符串或数组)
+        → {"object": "list", "data": [{"object": "embedding", "index": i, "embedding": [...]}],
+           "model": "...", "usage": {"prompt_tokens": N, "total_tokens": N}}
 
 模型:
     bge-m3             → BGEM3FlagModel("/home/l/.cache/hf-bge-m3", use_fp16=False)
@@ -44,7 +48,7 @@ import torch
 from fastapi import FastAPI, HTTPException
 from FlagEmbedding import BGEM3FlagModel
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 # ── 模型注册表 ────────────────────────────────────────────────────────
@@ -170,6 +174,15 @@ def ensure_model(name: str) -> Any:
         return model
 
 
+def _estimate_tokens(texts: list[str]) -> int:
+    """usage 用 token 估算，仅信息展示（客户端不依赖精确值）。
+
+    与模型实例解耦：单元测试用假模型（无 tokenizer）也能得到确定性正整数；
+    白名单式估算，空项已被上游 422 拦截，故每项 ≥1。
+    """
+    return sum(max(1, len(t.split())) for t in texts)
+
+
 # ── 请求/响应模型 ─────────────────────────────────────────────────────
 
 class EmbeddingRequest(BaseModel):
@@ -186,6 +199,29 @@ class RerankRequest(BaseModel):
     query: str
     top_n: int | None = None
     # 兼容 xinference/cohere 风格的其它字段,忽略即可
+
+
+class OpenAIEmbeddingRequest(BaseModel):
+    """OpenAI /v1/embeddings 兼容入参。未知额外字段默认忽略（pydantic v2 默认 extra="ignore"）。"""
+
+    model: str = "bge-m3"
+    input: str | list[str]
+
+    @field_validator("input", mode="before")
+    @classmethod
+    def _coerce_single_string(cls, v):
+        # OpenAI 官方接受「单条字符串」或「字符串数组」；统一成数组走同一路径。
+        return [v] if isinstance(v, str) else v
+
+    @field_validator("input", mode="after")
+    @classmethod
+    def _reject_empty(cls, v):
+        # 此时 v 已被 pydantic 校验为 list[str]（before 已把 str 归一化为 [str]）。
+        if not v:
+            raise ValueError("input must contain at least one item")
+        if any(not x.strip() for x in v):
+            raise ValueError("input items must be non-empty strings")
+        return v
 
 
 # ── 端点 ──────────────────────────────────────────────────────────────
@@ -249,6 +285,47 @@ def rerank(req: RerankRequest) -> dict:
     if req.top_n is not None and req.top_n > 0:
         ranked = ranked[: req.top_n]
     return {"results": ranked}
+
+
+@app.post("/v1/embeddings")
+def openai_embeddings(req: OpenAIEmbeddingRequest) -> dict:
+    # 1) 模型名白名单校验：先于任何加载，风格对齐 /v1/rerank。
+    if req.model not in EMBED_MODELS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"model '{req.model}' is not an embedding model (available: {sorted(EMBED_MODELS)})",
+        )
+
+    # 2) 复用懒加载（ensure_model 内部已处理：未加载→加载，加载失败→503 不缓存）。
+    model = ensure_model("bge-m3")
+    texts: list[str] = req.input
+
+    # 3) 复用 encode，不传 normalize（OpenAI 默认不归一化，bge-m3 默认也不归一化）。
+    try:
+        out = model.encode(texts, return_dense=True)
+    except Exception as e:
+        logger.exception("OpenAI embeddings encode failed")
+        raise HTTPException(status_code=500, detail=f"encode failed: {e}") from e
+
+    # 4) 防御：dense 输出缺失或行数不符 → 500。
+    dense_vecs = out.get("dense_vecs") if isinstance(out, dict) else None
+    if dense_vecs is None or len(dense_vecs) != len(texts):
+        raise HTTPException(status_code=500, detail="encode returned unexpected output shape")
+
+    # 5) 组装 OpenAI 形态：index 与 input 顺序严格一一对应。
+    data = [
+        {"object": "embedding", "index": i, "embedding": dense_vecs[i].tolist()}
+        for i in range(len(texts))
+    ]
+
+    # 6) usage：prompt_tokens == total_tokens（无 completion）。
+    n_tokens = _estimate_tokens(texts)
+    return {
+        "object": "list",
+        "data": data,
+        "model": req.model,  # 经白名单校验后必为 "bge-m3"，等价于回显请求模型名
+        "usage": {"prompt_tokens": n_tokens, "total_tokens": n_tokens},
+    }
 
 
 if __name__ == "__main__":
